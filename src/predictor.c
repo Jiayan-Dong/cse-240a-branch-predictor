@@ -213,7 +213,7 @@ train_alpha21264(uint32_t pc, uint8_t outcome) {
   //get lower ghistoryBits of pc
   uint32_t lht_entries = 1 << alpha21264LIndexBits;
   uint32_t lht_index = pc & (lht_entries-1);
-  
+
   uint32_t lpt_entries = 1 << alpha21264LhistoryBits;
   uint32_t lpt_index = lht_alpha21264[lht_index] & (lpt_entries-1);
 
@@ -316,6 +316,7 @@ init_predictor()
       init_alpha21264();
       break;
     case CUSTOM:
+      init_alpha21264();
     default:
       break;
   }
@@ -339,6 +340,7 @@ make_prediction(uint32_t pc)
     case TOURNAMENT:
       return alpha21264_predict(pc);
     case CUSTOM:
+      return alpha21264_predict(pc);
     default:
       break;
   }
@@ -363,6 +365,7 @@ train_predictor(uint32_t pc, uint8_t outcome)
     case TOURNAMENT:
       return train_alpha21264(pc, outcome);
     case CUSTOM:
+      return train_alpha21264(pc, outcome);
     default:
       break;
   }
