@@ -18,7 +18,7 @@ overall_incorrect = 0
 
 for t in traces:
     xe = os.popen(
-        "bunzip2 -kc ../traces/{}.bz2 | ./predictor --tournament".format(t), 'r')
+        "bunzip2 -kc ../traces/{}.bz2 | ./predictor --custom".format(t), 'r')
     output = xe.read()
     result = re.findall(r"\d+\.?\d*", output)
     results.append([t] + result)
