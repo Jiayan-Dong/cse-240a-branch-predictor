@@ -170,7 +170,8 @@ struct tage_component_entry
 
 struct saturating_counter *T0;
 struct tage_component_entry *tage_component[COMPONENT_NUM];
-uint64_t tage_component_used_length[COMPONENT_NUM] = {5, 9, 15, 25, 44, 76, 130};
+// uint64_t tage_component_used_length[COMPONENT_NUM] = {5, 9, 15, 25, 44, 76, 130};
+uint64_t tage_component_used_length[COMPONENT_NUM] = {4, 9, 15, 25, 44, 76, 150};
 struct circular_shift_register csr0[COMPONENT_NUM];
 struct circular_shift_register csr1[COMPONENT_NUM];
 struct circular_shift_register csr2[COMPONENT_NUM];
