@@ -55,15 +55,19 @@ uint8_t *gpt_alpha21264;
 uint8_t *ct_alpha21264;
 
 // Custom: TAGE
-#define TAGE_GHR_SIZE_QW 4
+#define TAGE_GHR_SIZE_QW 16
 #define COMPONENT_NUM 7
 
-int T0_PC = 10;
-int Ti_PC = 8;
+int T0_PC = 11; // 2^11 * 2 = 4 * 2^10
+int Ti_PC = 8;  // Ti(1-7): 7 * (11+2+3) * 2^8 = 28 * 2^10
 int tag_bit = 11;
 int u_bit = 2;
-int pred_bit = 3;
-
+int pred_bit = 3; // Total: 4 * 2^10 + 28 * 2^10 = 2^15 = 32Kbits
+                  // With max history 130
+                  // if using csr: len 5 doesn't need one, len 9 only need 1 8-bit csr
+                  // the other len need (8+11+10) bits, total 103 bits
+                  // with one possible linear feedback shift register 16 bits
+                  // total = 130 + 103 + 16 = 249 bits <= 320 bits
 uint64_t tage_ghr[TAGE_GHR_SIZE_QW];
 
 uint64_t get_bit_in_tage_ghr(uint64_t idx)
@@ -142,6 +146,18 @@ void dec_saturating_counter(struct saturating_counter *p)
   else
   {
     p->ctr -= 1;
+  }
+}
+
+void update_saturating_counter(struct saturating_counter *p, uint8_t outcome)
+{
+  if (outcome == TAKEN)
+  {
+    inc_saturating_counter(p);
+  }
+  else
+  {
+    dec_saturating_counter(p);
   }
 }
 
@@ -424,7 +440,7 @@ void init_tage()
   for (size_t i = 0; i < T0_entries; i++)
   {
     T0[i].bits = 2;
-    T0[i].ctr = WT;
+    T0[i].ctr = WN;
   }
 
   uint32_t Ti_entries = 1 << Ti_PC;
@@ -474,12 +490,13 @@ uint8_t tage_predict(uint32_t pc)
 
 void train_tage(uint32_t pc, uint8_t outcome)
 {
-  uint8_t pred_result;
+  uint8_t pred;
+  uint8_t altpred;
 
-  uint8_t propred = 0;
+  int8_t pred_index = -1;
+  int8_t altpred_index = -1;
   uint32_t Ti_indexes[COMPONENT_NUM];
   uint32_t Ti_tags[COMPONENT_NUM];
-  uint8_t altpred = 0;
 
   uint8_t not_found = 1;
   uint32_t Ti_mask = (1 << Ti_PC) - 1;
@@ -496,46 +513,99 @@ void train_tage(uint32_t pc, uint8_t outcome)
     Ti_tags[i] = tag;
     if (tage_component[i][Ti_index].tag == tag)
     {
-      if (propred == 0)
+      if (pred_index == -1)
       {
-        propred = i;
         not_found = 0;
-        pred_result = get_saturating_counter(&tage_component[i][Ti_index].pred);
+        pred_index = i;
+        pred = get_saturating_counter(&tage_component[i][Ti_index].pred);
       }
-      else if (altpred == 0)
+      else if (altpred_index == -1)
       {
-        altpred = i;
+        altpred_index = i;
+        altpred = get_saturating_counter(&tage_component[i][Ti_index].pred);
         break;
       }
     }
   }
-  if (not_found)
+  uint32_t T0_entries = 1 << T0_PC;
+  uint32_t T0_index = pc & (T0_entries - 1);
+  if (pred_index == -1)
   {
-    uint32_t T0_entries = 1 << T0_PC;
-    uint32_t T0_index = pc & (T0_entries - 1);
-    pred_result = get_saturating_counter(&T0[T0_index]);
+    pred = get_saturating_counter(&T0[T0_index]);
   }
 
-  if (propred != 0 && propred != altpred)
+  if (altpred_index == -1)
   {
-    if (pred_result == outcome)
+    altpred = get_saturating_counter(&T0[T0_index]);
+  }
+
+  if (pred_index != -1 && pred != altpred)
+  {
+    if (pred == outcome)
     {
-      inc_saturating_counter(&tage_component[propred][Ti_indexes[propred]].u);
+      inc_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].u);
     }
     else
     {
-      dec_saturating_counter(&tage_component[propred][Ti_indexes[propred]].u);
+      dec_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].u);
     }
   }
 
-  if (pred_result != outcome)
+  if (pred == outcome)
   {
-    dec_saturating_counter(&tage_component[propred][Ti_indexes[propred]].pred);
-    if (propred != COMPONENT_NUM - 1)
+    if (pred_index != -1)
+    {
+      if (outcome == TAKEN)
+      {
+        inc_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].pred);
+      }
+      else if (outcome == NOTTAKEN)
+      {
+        dec_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].pred);
+      }
+    }
+    else
+    {
+      if (outcome == TAKEN)
+      {
+        inc_saturating_counter(&T0[T0_index]);
+      }
+      else if (outcome == NOTTAKEN)
+      {
+        dec_saturating_counter(&T0[T0_index]);
+      }
+    }
+  }
+  else if (pred != outcome)
+  {
+    if (pred_index != -1)
+    {
+      if (outcome == TAKEN)
+      {
+        inc_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].pred);
+      }
+      else if (outcome == NOTTAKEN)
+      {
+        dec_saturating_counter(&tage_component[pred_index][Ti_indexes[pred_index]].pred);
+      }
+    }
+    else
+    {
+      if (outcome == TAKEN)
+      {
+        inc_saturating_counter(&T0[T0_index]);
+      }
+      else if (outcome == NOTTAKEN)
+      {
+        dec_saturating_counter(&T0[T0_index]);
+      }
+    }
+
+    if (pred_index != COMPONENT_NUM - 1)
     {
       int comp_num = 0;
       not_found = 1;
-      for (size_t i = propred + 1; i < COMPONENT_NUM; i++)
+      for (size_t i = pred_index + 1; i < COMPONENT_NUM; i++)
       {
         if (tage_component[i][Ti_indexes[i]].u.ctr == 0)
         {
@@ -547,7 +617,7 @@ void train_tage(uint32_t pc, uint8_t outcome)
       {
         comp_num = (1 << comp_num) - 1;
         int r = rand() % comp_num;
-        for (size_t i = propred + 1; i < COMPONENT_NUM; i++)
+        for (size_t i = pred_index + 1; i < COMPONENT_NUM; i++)
         {
           if (tage_component[i][Ti_indexes[i]].u.ctr == 0)
           {
@@ -567,7 +637,7 @@ void train_tage(uint32_t pc, uint8_t outcome)
     }
     if (not_found)
     {
-      for (size_t i = propred + 1; i < COMPONENT_NUM; i++)
+      for (size_t i = pred_index + 1; i < COMPONENT_NUM; i++)
       {
         dec_saturating_counter(&tage_component[i][Ti_indexes[i]].u);
       }
@@ -775,30 +845,30 @@ void cleanup_bimode()
   free(ct_bimode);
 }
 
-// Cust
-uint64_t *lht_cust;
-uint8_t *lpt_cust;
+// cust_alpha21264
+uint64_t *lht_cust_alpha21264;
+uint8_t *lpt_cust_alpha21264;
 
-uint8_t *gpt_cust;
+uint8_t *gpt_cust_alpha21264;
 
-uint8_t *ct_cust;
+uint8_t *ct_cust_alpha21264;
 
-int custLhistoryBits = 10; // Number of bits of saturating counter used for Local prediction
-int custLIndexBits = 10;   // Number of Program counter bits used for Local history table
-int custChoiceBits = 12;   // Number of Path history bits used for Choice prediction
+int cust_alpha21264LhistoryBits = 10; // Number of bits of saturating counter used for Local prediction
+int cust_alpha21264LIndexBits = 10;   // Number of Program counter bits used for Local history table
+int cust_alpha21264ChoiceBits = 12;   // Number of Path history bits used for Choice prediction
 
-// cust functions
-void init_cust()
+// cust_alpha21264 functions
+void init_cust_alpha21264()
 {
-  int lht_entries = 1 << custLIndexBits;                         // 2^10 entries in LHT (Local histort table)
-  int lpt_entries = 1 << custLhistoryBits;                       // 2^10 entries in LPT (Local prediction table)
-  int choice_entries = 1 << custChoiceBits;                      // 2^12 entries in CT (Choice prediction table)
-  lht_cust = (uint64_t *)calloc(lht_entries, sizeof(uint64_t));  // 2^10 * 10 (bit counter) = 10 * 2^10 bits
-  lpt_cust = (uint8_t *)malloc(lpt_entries * sizeof(uint8_t));   // 2^10 * 2 (bit counter) = 2 * 2^10 bits
-  ct_cust = (uint8_t *)malloc(choice_entries * sizeof(uint8_t)); // 2^12 * 2 (bit counter) = 8 * 2^10 bits
+  int lht_entries = 1 << cust_alpha21264LIndexBits;                         // 2^10 entries in LHT (Local histort table)
+  int lpt_entries = 1 << cust_alpha21264LhistoryBits;                       // 2^10 entries in LPT (Local prediction table)
+  int choice_entries = 1 << cust_alpha21264ChoiceBits;                      // 2^12 entries in CT (Choice prediction table)
+  lht_cust_alpha21264 = (uint64_t *)calloc(lht_entries, sizeof(uint64_t));  // 2^10 * 10 (bit counter) = 10 * 2^10 bits
+  lpt_cust_alpha21264 = (uint8_t *)malloc(lpt_entries * sizeof(uint8_t));   // 2^10 * 2 (bit counter) = 2 * 2^10 bits
+  ct_cust_alpha21264 = (uint8_t *)malloc(choice_entries * sizeof(uint8_t)); // 2^12 * 2 (bit counter) = 8 * 2^10 bits
 
-  memset(lpt_cust, WN, lht_entries);
-  memset(ct_cust, WN, choice_entries);
+  memset(lpt_cust_alpha21264, WN, lht_entries);
+  memset(ct_cust_alpha21264, WN, choice_entries);
 
   bimode_nt_ghistoryBits = 11;
   bimode_t_ghistoryBits = 11;
@@ -810,21 +880,21 @@ void init_cust()
   ghistory = 0;
 }
 
-uint8_t cust_predict(uint32_t pc)
+uint8_t cust_alpha21264_predict(uint32_t pc)
 {
   // get lower ghistoryBits of pc
-  uint32_t lht_entries = 1 << custLIndexBits;
+  uint32_t lht_entries = 1 << cust_alpha21264LIndexBits;
   uint32_t lht_index = pc & (lht_entries - 1);
 
-  uint32_t lpt_entries = 1 << custLhistoryBits;
-  uint32_t lpt_index = lht_cust[lht_index] & (lpt_entries - 1);
+  uint32_t lpt_entries = 1 << cust_alpha21264LhistoryBits;
+  uint32_t lpt_index = lht_cust_alpha21264[lht_index] & (lpt_entries - 1);
 
-  uint32_t ct_entries = 1 << custChoiceBits;
+  uint32_t ct_entries = 1 << cust_alpha21264ChoiceBits;
   uint32_t ct_index = ghistory & (ct_entries - 1);
 
-  if (ct_cust[ct_index] >= SN && ct_cust[ct_index] <= WN)
+  if (ct_cust_alpha21264[ct_index] >= SN && ct_cust_alpha21264[ct_index] <= WN)
   {
-    switch (lpt_cust[lpt_index])
+    switch (lpt_cust_alpha21264[lpt_index])
     {
     case WN:
       return NOTTAKEN;
@@ -835,53 +905,53 @@ uint8_t cust_predict(uint32_t pc)
     case ST:
       return TAKEN;
     default:
-      printf("Warning: Undefined state of entry in cust LPT!\n");
+      printf("Warning: Undefined state of entry in cust_alpha21264 LPT!\n");
       return NOTTAKEN;
     }
   }
-  else if (ct_cust[ct_index] >= WT && ct_cust[ct_index] <= ST)
+  else if (ct_cust_alpha21264[ct_index] >= WT && ct_cust_alpha21264[ct_index] <= ST)
   {
     return bimode_predict(pc);
   }
   else
   {
-    printf("Warning: Undefined state of entry in cust CT!\n");
+    printf("Warning: Undefined state of entry in cust_alpha21264 CT!\n");
     return NOTTAKEN;
   }
 }
 
-void train_cust(uint32_t pc, uint8_t outcome)
+void train_cust_alpha21264(uint32_t pc, uint8_t outcome)
 {
   // get lower ghistoryBits of pc
-  uint32_t lht_entries = 1 << custLIndexBits;
+  uint32_t lht_entries = 1 << cust_alpha21264LIndexBits;
   uint32_t lht_index = pc & (lht_entries - 1);
 
-  uint32_t lpt_entries = 1 << custLhistoryBits;
-  uint32_t lpt_index = lht_cust[lht_index] & (lpt_entries - 1);
+  uint32_t lpt_entries = 1 << cust_alpha21264LhistoryBits;
+  uint32_t lpt_index = lht_cust_alpha21264[lht_index] & (lpt_entries - 1);
 
-  uint32_t ct_entries = 1 << custChoiceBits;
+  uint32_t ct_entries = 1 << cust_alpha21264ChoiceBits;
   uint32_t ct_index = ghistory & (ct_entries - 1);
 
   uint8_t lpt_outcome;
   uint8_t bimode_outcome = bimode_predict(pc);
 
   // Update state of entry in bht based on outcome
-  switch (lpt_cust[lpt_index])
+  switch (lpt_cust_alpha21264[lpt_index])
   {
   case WN:
-    lpt_cust[lpt_index] = (outcome == TAKEN) ? WT : SN;
+    lpt_cust_alpha21264[lpt_index] = (outcome == TAKEN) ? WT : SN;
     lpt_outcome = NOTTAKEN;
     break;
   case SN:
-    lpt_cust[lpt_index] = (outcome == TAKEN) ? WN : SN;
+    lpt_cust_alpha21264[lpt_index] = (outcome == TAKEN) ? WN : SN;
     lpt_outcome = NOTTAKEN;
     break;
   case WT:
-    lpt_cust[lpt_index] = (outcome == TAKEN) ? ST : WN;
+    lpt_cust_alpha21264[lpt_index] = (outcome == TAKEN) ? ST : WN;
     lpt_outcome = TAKEN;
     break;
   case ST:
-    lpt_cust[lpt_index] = (outcome == TAKEN) ? ST : WT;
+    lpt_cust_alpha21264[lpt_index] = (outcome == TAKEN) ? ST : WT;
     lpt_outcome = TAKEN;
     break;
   default:
@@ -891,21 +961,21 @@ void train_cust(uint32_t pc, uint8_t outcome)
   train_bimode(pc, outcome);
   ghistory = (ghistory >> 1);
 
-  if ((lpt_cust[lpt_index] == ST || lpt_cust[lpt_index] == WT) ^ (bimode_outcome == TAKEN))
+  if ((lpt_cust_alpha21264[lpt_index] == ST || lpt_cust_alpha21264[lpt_index] == WT) ^ (bimode_outcome == TAKEN))
   {
-    switch (ct_cust[ct_index])
+    switch (ct_cust_alpha21264[ct_index])
     {
     case WN:
-      ct_cust[ct_index] = (outcome == lpt_outcome) ? SN : WT;
+      ct_cust_alpha21264[ct_index] = (outcome == lpt_outcome) ? SN : WT;
       break;
     case SN:
-      ct_cust[ct_index] = (outcome == lpt_outcome) ? SN : WN;
+      ct_cust_alpha21264[ct_index] = (outcome == lpt_outcome) ? SN : WN;
       break;
     case WT:
-      ct_cust[ct_index] = (outcome == bimode_outcome) ? ST : WN;
+      ct_cust_alpha21264[ct_index] = (outcome == bimode_outcome) ? ST : WN;
       break;
     case ST:
-      ct_cust[ct_index] = (outcome == bimode_outcome) ? ST : WT;
+      ct_cust_alpha21264[ct_index] = (outcome == bimode_outcome) ? ST : WT;
       break;
     default:
       printf("Warning: Undefined state of entry in GSHARE BHT!\n");
@@ -913,16 +983,16 @@ void train_cust(uint32_t pc, uint8_t outcome)
   }
 
   // Update history register
-  lht_cust[lht_index] = ((lht_cust[lht_index] << 1) | outcome);
+  lht_cust_alpha21264[lht_index] = ((lht_cust_alpha21264[lht_index] << 1) | outcome);
   ghistory = ((ghistory << 1) | outcome);
 }
 
-void cleanup_cust()
+void cleanup_cust_alpha21264()
 {
-  free(lht_cust);
-  free(lpt_cust);
-  free(gpt_cust);
-  free(ct_cust);
+  free(lht_cust_alpha21264);
+  free(lpt_cust_alpha21264);
+  free(gpt_cust_alpha21264);
+  free(ct_cust_alpha21264);
   cleanup_bimode();
 }
 
@@ -938,9 +1008,9 @@ void init_predictor()
     init_alpha21264();
     break;
   case CUSTOM:
-    // init_tage();
+    init_tage();
     // init_bimode();
-    init_cust();
+    // init_cust_alpha21264();
   default:
     break;
   }
@@ -963,9 +1033,9 @@ uint8_t make_prediction(uint32_t pc)
   case TOURNAMENT:
     return alpha21264_predict(pc);
   case CUSTOM:
-    // return tage_predict(pc);
+    return tage_predict(pc);
     // return bimode_predict(pc);
-    return cust_predict(pc);
+    // return cust_alpha21264_predict(pc);
   default:
     break;
   }
@@ -990,9 +1060,9 @@ void train_predictor(uint32_t pc, uint8_t outcome)
   case TOURNAMENT:
     return train_alpha21264(pc, outcome);
   case CUSTOM:
-    // return train_tage(pc, outcome);
+    return train_tage(pc, outcome);
     // return train_bimode(pc, outcome);
-    train_cust(pc, outcome);
+    // train_cust_alpha21264(pc, outcome);
   default:
     break;
   }

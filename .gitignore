@@ -2,3 +2,4 @@
 src/*.o
 src/*.txt
 src/predictor
+src/.vscode/launch.json
