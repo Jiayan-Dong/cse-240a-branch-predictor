@@ -67,4 +67,30 @@ uint8_t make_prediction(uint32_t pc);
 //
 void train_predictor(uint32_t pc, uint8_t outcome);
 
+void init_bimode();
+
+uint8_t bimode_predict(uint32_t pc);
+
+void train_bimode(uint32_t pc, uint8_t outcome);
+
+void cleanup_bimode();
+
+
+void init_cust_alpha21264();
+
+uint8_t cust_alpha21264_predict(uint32_t pc);
+
+void train_cust_alpha21264(uint32_t pc, uint8_t outcome);
+
+void cleanup_cust_alpha21264();
+
+
+void init_tage();
+
+uint8_t tage_predict(uint32_t pc);
+
+void train_tage(uint32_t pc, uint8_t outcome);
+
+void cleanup_tage();
+
 #endif
